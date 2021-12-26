@@ -48,8 +48,9 @@ impl ReservedExtMetadataBlock {
 }
 
 impl ExtMetadataBlockInfo for ReservedExtMetadataBlock {
+    // TODO: Level 255 is actually definded for DM debugging purposes, we may add it.
     fn level(&self) -> u8 {
-        255
+        0
     }
 
     fn bytes_size(&self) -> u64 {

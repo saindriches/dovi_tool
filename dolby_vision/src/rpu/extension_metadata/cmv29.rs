@@ -17,6 +17,7 @@ pub struct CmV29DmData {
 impl WithExtMetadataBlocks for CmV29DmData {
     const VERSION: &'static str = "CM v2.9";
     const ALLOWED_BLOCK_LEVELS: &'static [u8] = &[1, 2, 4, 5, 6];
+    const VARIABLE_LENGTH_BLOCK_LEVELS: &'static [u8] = &[];
 
     fn set_num_ext_blocks(&mut self, num_ext_blocks: u64) {
         self.num_ext_blocks = num_ext_blocks;

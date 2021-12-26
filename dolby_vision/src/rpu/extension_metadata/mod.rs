@@ -29,6 +29,7 @@ pub trait ExtMetadata {
 pub trait WithExtMetadataBlocks {
     const VERSION: &'static str;
     const ALLOWED_BLOCK_LEVELS: &'static [u8];
+    const VARIABLE_LENGTH_BLOCK_LEVELS: &'static [u8];
 
     fn set_num_ext_blocks(&mut self, num_ext_blocks: u64);
     fn num_ext_blocks(&self) -> u64;

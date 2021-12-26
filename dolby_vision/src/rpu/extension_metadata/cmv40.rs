@@ -17,6 +17,7 @@ pub struct CmV40DmData {
 impl WithExtMetadataBlocks for CmV40DmData {
     const VERSION: &'static str = "CM v4.0";
     const ALLOWED_BLOCK_LEVELS: &'static [u8] = &[3, 8, 9, 10, 11, 254];
+    const VARIABLE_LENGTH_BLOCK_LEVELS: &'static [u8] = &[8, 9, 10];
 
     fn set_num_ext_blocks(&mut self, num_ext_blocks: u64) {
         self.num_ext_blocks = num_ext_blocks;
@@ -40,9 +41,9 @@ impl WithExtMetadataBlocks for CmV40DmData {
 
         let ext_metadata_block = match ext_block_level {
             3 => level3::ExtMetadataBlockLevel3::parse(reader),
-            8 => level8::ExtMetadataBlockLevel8::parse(reader),
-            9 => level9::ExtMetadataBlockLevel9::parse(reader),
-            10 => level10::ExtMetadataBlockLevel10::parse(reader),
+            8 => level8::ExtMetadataBlockLevel8::parse(ext_block_length, reader),
+            9 => level9::ExtMetadataBlockLevel9::parse(ext_block_length, reader),
+            10 => level10::ExtMetadataBlockLevel10::parse(ext_block_length, reader),
             11 => level11::ExtMetadataBlockLevel11::parse(reader),
             254 => level254::ExtMetadataBlockLevel254::parse(reader),
             _ => {

@@ -61,6 +61,18 @@ pub trait ExtMetadataBlockInfo {
         self.bytes_size() * 8
     }
 
+    fn possible_bytes_size(&self) -> Vec<u64> {
+        vec![]
+    }
+
+    fn possible_required_bits(&self) -> Vec<u64> {
+        vec![]
+    }
+
+    fn possible_bits_size(&self) -> Vec<u64> {
+        vec![]
+    }
+
     fn sort_key(&self) -> (u8, u16) {
         (self.level(), 0)
     }
@@ -115,6 +127,57 @@ impl ExtMetadataBlock {
             ExtMetadataBlock::Level11(b) => b.required_bits(),
             ExtMetadataBlock::Level254(b) => b.required_bits(),
             ExtMetadataBlock::Reserved(b) => b.required_bits(),
+        }
+    }
+
+    pub fn possible_length_bytes(&self) -> Vec<u64> {
+        match self {
+            ExtMetadataBlock::Level1(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level2(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level3(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level4(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level5(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level6(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level8(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level9(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level10(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level11(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Level254(b) => b.possible_bytes_size(),
+            ExtMetadataBlock::Reserved(b) => b.possible_bytes_size(),
+        }
+    }
+
+    pub fn possible_length_bits(&self) -> Vec<u64> {
+        match self {
+            ExtMetadataBlock::Level1(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level2(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level3(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level4(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level5(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level6(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level8(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level9(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level10(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level11(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Level254(b) => b.possible_bits_size(),
+            ExtMetadataBlock::Reserved(b) => b.possible_bits_size(),
+        }
+    }
+
+    pub fn possible_required_bits(&self) -> Vec<u64> {
+        match self {
+            ExtMetadataBlock::Level1(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level2(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level3(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level4(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level5(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level6(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level8(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level9(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level10(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level11(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Level254(b) => b.possible_required_bits(),
+            ExtMetadataBlock::Reserved(b) => b.possible_required_bits(),
         }
     }
 
@@ -190,7 +253,12 @@ impl ExtMetadataBlock {
         let level = self.level();
 
         ensure!(
-            expected_length == self.length_bytes(),
+            if T::VARIABLE_LENGTH_BLOCK_LEVELS.contains(&level) {
+                self.possible_length_bytes().contains(&expected_length)
+            } else {
+                expected_length == self.length_bytes()
+            }
+            ,
             format!(
                 "{}: Invalid metadata block. Block level {} should have length {}",
                 T::VERSION,
@@ -200,8 +268,16 @@ impl ExtMetadataBlock {
         );
 
         self.validate_correct_dm_data::<T>()?;
-
-        let ext_block_use_bits = self.length_bits() - self.required_bits();
+        
+        let mut ext_block_use_bits = 0;
+        if T::VARIABLE_LENGTH_BLOCK_LEVELS.contains(&level) {
+            if self.possible_length_bytes().contains(&expected_length) {
+                let index = self.possible_length_bytes().iter().position(|b| b == &expected_length).unwrap();
+                ext_block_use_bits = self.possible_length_bits()[index] - self.possible_required_bits()[index];
+            }
+        } else {
+                ext_block_use_bits = self.length_bits() - self.required_bits();
+        }
 
         for _ in 0..ext_block_use_bits {
             ensure!(
