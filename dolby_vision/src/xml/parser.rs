@@ -13,8 +13,7 @@ use crate::rpu::vdr_dm_data::CmVersion;
 #[derive(Default, Debug)]
 pub struct CmXmlParser {
     opts: XmlParserOpts,
-
-    xml_version: String,
+    xml_version: u16,
     separator: char,
 
     target_displays: HashMap<String, TargetDisplay>,
@@ -32,6 +31,7 @@ pub struct XmlParserOpts {
 pub struct TargetDisplay {
     id: String,
     peak_nits: u16,
+    primaries: String,
 }
 
 impl CmXmlParser {
@@ -99,7 +99,7 @@ impl CmXmlParser {
         Ok(parser)
     }
 
-    fn parse_xml_version(&self, doc: &Document) -> Result<String> {
+    fn parse_xml_version(&self, doc: &Document) -> Result<u16> {
         if let Some(node) = doc.descendants().find(|e| e.has_tag_name("DolbyLabsMDF")) {
             let version_attr = node.attribute("version");
             let version_node =
@@ -109,52 +109,43 @@ impl CmXmlParser {
                     None
                 };
 
-            let min_version_level254 = if let Some(_) =
-                node.descendants().find(|e| e.has_tag_name("Level254"))
-            {
-                Some("4.0.2")
-            } else {
-                None
-            };
+            let mut rev: u16 = 0;
 
-            let min_version_level11 = if let Some(_) =
-                node.descendants().find(|e| e.has_tag_name("Level11"))
-            {
-                Some("5.1.0")
-            } else {
-                None
-            };
-
-            if let Some(v) = version_node {
-                let mut checklevel: u8 = 0;
-                match v {
-                    "5.1.0" => {checklevel += 2}
-                    "4.0.2" | "5.0.0" => {checklevel += 1}
-                    _ => {
-                        bail!("Unknown XML version {} found! Please open an issue.", v);
-                    }
-                }
-                // TODO: Add more checks
-                if checklevel >= 2 && min_version_level11.is_none() {
-                    bail!("No L11 metadata found in XML version {}!", v);
-                }
-                if checklevel >= 1 && min_version_level254.is_none() {
-                    bail!("No L254 metadata found in XML version {}!", v);
-                }
-                Ok(v.to_string())
-            } else if let Some(v) = version_attr {
-                match v {
-                    "2.0.5" => {}
-                    _ => {
-                        bail!("Invalid XML version {} found!", v);
-                    }
-                }
-                Ok(v.to_string())
+            if let Some(v) = version_attr {
+                let ver: Vec<&str> = v.split('.').collect();
+                ver
+                    .iter()
+                    .rev()
+                    .enumerate()
+                    .for_each(|(i, n)| {
+                        rev += n.parse::<u16>().unwrap() << (i * 4);
+                    });
+                match rev {
+                    0x205 => {}
+                    0x1 | 0x20 | 0x201 | 0x204 => bail!("Unhandled legacy XML version {} found! Please open an issue.", v),
+                    _ => bail!("invalid XML version {} found!", v)
+                };
+                Ok(rev)
+            } else if let Some(v) = version_node {
+                let ver: Vec<&str> = v.split('.').collect();
+                ver
+                    .iter()
+                    .rev()
+                    .enumerate()
+                    .for_each(|(i, n)| {
+                        rev += n.parse::<u16>().unwrap() << (i * 4);
+                    });
+                match rev {
+                    0x402 | 0x500 | 0x510 => {}
+                    0x510.. => println!("Possibly unhandled new XML version {} found! Please open an issue if you get anything wrong.", v),
+                    _ => bail!("invalid XML version {} found!", v)
+                };
+                Ok(rev)
             } else {
                 bail!("No XML version found!");
             }
-        } else {
-            bail!("Could not find DolbyLabsMDF root node.");
+    } else {
+         bail!("Could not find DolbyLabsMDF root node.");
         }
     }
 
@@ -235,7 +226,53 @@ impl CmXmlParser {
                     .parse::<u16>()
                     .unwrap();
 
-                targets.insert(id.clone(), TargetDisplay { id, peak_nits });
+                if self.xml_version >= 0x500 {
+                    let application_type = e
+                    .children()
+                    .find(|e| e.has_tag_name("ApplicationType"))
+                    .unwrap()
+                    .text()
+                    .unwrap()
+                    .to_string();
+
+                    // Only parse HOME targets
+                    if application_type == "HOME" {
+                        let primary_red = e
+                            .descendants()
+                            .find(|e| e.has_tag_name("Red"))
+                            .unwrap()
+                            .text()
+                            .unwrap();
+
+                        let primary_green = e
+                            .descendants()
+                            .find(|e| e.has_tag_name("Green"))
+                            .unwrap()
+                            .text()
+                            .unwrap();
+
+                        let primary_blue = e
+                            .descendants()
+                            .find(|e| e.has_tag_name("Blue"))
+                            .unwrap()
+                            .text()
+                            .unwrap();
+
+                        let primary_white = e
+                            .children()
+                            .find(|e| e.has_tag_name("WhitePoint"))
+                            .unwrap()
+                            .text()
+                            .unwrap();
+                        
+                        let primaries = [primary_red, primary_green, primary_blue,  primary_white]
+                            .join(&self.separator.to_string());
+                    
+                        targets.insert(id.clone(), TargetDisplay { id, peak_nits, primaries });
+                    }
+                } else {
+                    targets.insert(id.clone(), TargetDisplay { id, peak_nits, ..Default::default()});
+                }
             });
 
         targets
@@ -542,7 +579,6 @@ impl CmXmlParser {
             .unwrap_or_default())
     }
 
-    // FIXME: No reference to compare impl
     pub fn parse_level8_trim(&self, node: &Node) -> Result<ExtMetadataBlockLevel8> {
         let target_id = node
             .children()
@@ -565,21 +601,21 @@ impl CmXmlParser {
             .get(&target_id)
             .expect("No target display found for L8 trim");
 
-        ensure!(trim.len() == 6, "invalid L8 trim: should be 6 values");
+        ensure!(trim.len() == 6, "Invalid L8 trim: should be 6 values");
 
         let bias = node
             .children()
             .find(|e| e.has_tag_name("MidContrastBias"))
             .unwrap()
             .text()
-            .map_or(0.0, |e| e.parse::<f32>().unwrap());
+            .unwrap();
 
         let clipping = node
             .children()
             .find(|e| e.has_tag_name("HighlightClipping"))
             .unwrap()
             .text()
-            .map_or(0.0, |e| e.parse::<f32>().unwrap());
+            .unwrap();
 
         let satvec = node
             .children()
@@ -587,8 +623,9 @@ impl CmXmlParser {
             .unwrap()
             .text()
             .unwrap();
+            
         let satvec: Vec<&str> = satvec.split(self.separator).collect();
-        let satvec = if satvec.len() != 6 {vec!["0"; 6]} else {satvec};
+        ensure!(satvec.len() == 6, "Invalid L8 SatVectorField: should be 6 values");
 
         let huevec = node
             .children()
@@ -596,8 +633,9 @@ impl CmXmlParser {
             .unwrap()
             .text()
             .unwrap();
+
         let huevec: Vec<&str> = huevec.split(self.separator).collect();
-        let huevec = if huevec.len() != 6 {vec!["0"; 6]} else {huevec};
+        ensure!(huevec.len() == 6, "Invalid L8 HueVectorField: should be 6 values");
 
         let trim_lift = trim[0].parse::<f32>().unwrap();
         let trim_gain = trim[1].parse::<f32>().unwrap();
@@ -629,27 +667,65 @@ impl CmXmlParser {
             ((trim[5].parse::<f32>().unwrap() * 2048.0) + 2048.0).round() as u16,
         );
 
-        let bias = min(
+        let target_mid_contrast = min(
             4095,
-            ((bias * 2048.0) + 2048.0).round() as u16,
+            ((bias.parse::<f32>().unwrap() * 2048.0) + 2048.0).round() as u16,
         );
 
-        let clipping = min(
+        let clip_trim = min(
             4095,
-            ((clipping * 2048.0) + 2048.0).round() as u16,
+            ((clipping.parse::<f32>().unwrap() * 2048.0) + 2048.0).round() as u16,
         );
 
-        let satvec: Vec<u8> = satvec
-            .iter()
-            .map(|v| min(255, ((v.parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8))
-            .collect();
+        let saturation_vector_field0 = min(
+            255, ((satvec[0].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
 
-        let huevec: Vec<u8> = huevec
-            .iter()
-            .map(|v| min(255, ((v.parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8))
-            .collect();
+        let saturation_vector_field1 = min(
+            255, ((satvec[1].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
 
-        let mut block = ExtMetadataBlockLevel8 {
+        let saturation_vector_field2 = min(
+            255, ((satvec[2].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let saturation_vector_field3 = min(
+            255, ((satvec[3].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let saturation_vector_field4 = min(
+            255, ((satvec[4].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let saturation_vector_field5 = min(
+            255, ((satvec[5].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let hue_vector_field0 = min(
+            255, ((huevec[0].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let hue_vector_field1 = min(
+            255, ((huevec[1].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let hue_vector_field2 = min(
+            255, ((huevec[2].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let hue_vector_field3 = min(
+            255, ((huevec[3].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let hue_vector_field4 = min(
+            255, ((huevec[4].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        let hue_vector_field5 = min(
+            255, ((huevec[5].parse::<f32>().unwrap() * 128.0) + 128.0).round() as u8,
+        );
+
+        Ok (ExtMetadataBlockLevel8 {
             target_display_index: target_display.id.parse::<u8>()?,
             trim_slope,
             trim_offset,
@@ -657,64 +733,105 @@ impl CmXmlParser {
             trim_chroma_weight,
             trim_saturation_gain,
             ms_weight,
-            ..Default::default()
-        };
+            target_mid_contrast,
+            clip_trim,
+            saturation_vector_field0,
+            saturation_vector_field1,
+            saturation_vector_field2,
+            saturation_vector_field3,
+            saturation_vector_field4,
+            saturation_vector_field5,
+            hue_vector_field0,
+            hue_vector_field1,
+            hue_vector_field2,
+            hue_vector_field3,
+            hue_vector_field4,
+            hue_vector_field5,
+        })
+    }
 
-        let mut bit_flag: u8 = 0b0000;
-        if bias != 2048 {
-            bit_flag |= 0b0001
-        };
-        if clipping != 2048 {
-            bit_flag |= 0b0010
-        };
-        if satvec != vec![128; 6] {
-            bit_flag |= 0b0100
-        };
-        if huevec != vec![128; 6] {
-            bit_flag |= 0b1000
-        };
+    fn parse_primary_index(&self, primaries: &Vec<&str>, is_source: bool) -> Result<u8> {
+        fn compare_primaries(a: &Vec<&str>, b: &[f64; 8], compare_flag: &mut u8) -> bool {
+            *compare_flag = 0;
+            for i in 0..8 {
+                if (a[i].parse::<f64>().unwrap() - b[i]).abs() < f64::EPSILON {
+                    *compare_flag |= 1 << i;
+                } else {
+                    break;
+                }
+            };
+            if *compare_flag == 0b11111111 {
+                return true;
+            } else {
+                return false;
+            }
+        }
 
-        if bit_flag & 0b1111 != 0 {
-            block.target_mid_contrast = Some(bias)
+        let mut result: u8 = 0;
+        let mut compare_flag: u8 = 0;
+        for p in PREDEFINED_COLORSPACE_PRIMARIES {
+            if compare_primaries(primaries, p, &mut compare_flag) {
+                break;
+            } else {
+                result += 1;
+            };
         };
-        if bit_flag & 0b1110 != 0 {
-            block.clip_trim = Some(clipping)
+        if compare_flag != 0b11111111 && is_source {
+            for p in PREDEFINED_REALDEVICE_PRIMARIES {
+                if compare_primaries(primaries, p, &mut compare_flag) {
+                    break;
+                } else {
+                    result += 1;
+                };
+            };
         };
-        if bit_flag & 0b1100 != 0 {
-            block.saturation_vector_field0 = Some(satvec[0]);
-            block.saturation_vector_field1 = Some(satvec[1]);
-            block.saturation_vector_field2 = Some(satvec[2]);
-            block.saturation_vector_field3 = Some(satvec[3]);
-            block.saturation_vector_field4 = Some(satvec[4]);
-            block.saturation_vector_field5 = Some(satvec[5]);
-        };
-        if bit_flag & 0b1000 != 0 {
-            block.hue_vector_field0 = Some(huevec[0]);
-            block.hue_vector_field1 = Some(huevec[1]);
-            block.hue_vector_field2 = Some(huevec[2]);
-            block.hue_vector_field3 = Some(huevec[3]);
-            block.hue_vector_field4 = Some(huevec[4]);
-            block.hue_vector_field5 = Some(huevec[5]);
-        };
-
-        Ok(block)
+        if compare_flag != 0b11111111 {
+            result = 255;
+        }
+        Ok(result)
     }
 
     pub fn parse_level9_trim(&self, node: &Node) -> Result<ExtMetadataBlockLevel9> {
-        let source_color_model = node
+        let source_color_primary = node
             .children()
-            .find(|e| e.has_tag_name("SourceColorModel"))
+            .find(|e| e.has_tag_name("SourceColorPrimary"))
             .unwrap()
             .text()
             .unwrap();
+            
+            let primaries: Vec<&str> = source_color_primary.split(self.separator).collect();
+            ensure!(primaries.len() == 8, "Invalid L9 SourceColorPrimary: should be 8 values");
+            let index = self.parse_primary_index(&primaries, true)?;
 
-        let source_primary_index = source_color_model.parse::<u8>()?;
+            let mut block = ExtMetadataBlockLevel9 {
+                source_primary_index: index,
+              ..Default::default()
+            };
 
-        // TODO
-        Ok(ExtMetadataBlockLevel9 {
-            source_primary_index,
-            ..Default::default()
-        })
+            if index == 255 {
+                let p: Vec<u16> = primaries
+                    .iter()
+                    .map(|v||i| -> u16 {
+                            match i {
+                                // This value will not be 32768
+                                32767.. => min(32767, i - 32767),
+                                _ => i + 32769,
+                            }
+                        } ((v.parse::<f64>().unwrap() * 32767.0 + 32767.0).round() as u16)
+                    )
+                    .collect();
+                
+                block.source_primary_red_x =p[0];
+                block.source_primary_red_y = p[1];
+                block.source_primary_green_x = p[2];
+                block.source_primary_green_y = p[3];
+                block.source_primary_blue_x = p[4];
+                block.source_primary_blue_y = p[5];
+                block.source_primary_white_x = p[6];
+                block.source_primary_white_y = p[7];
+            }
+
+        Ok(block)
     }
 
     fn calculate_level5_metadata(
@@ -760,6 +877,6 @@ impl CmXmlParser {
     }
 
     pub fn is_cmv4(&self) -> bool {
-        self.xml_version != "2.0.5"
+        self.xml_version >= 0x402
     }
 }
