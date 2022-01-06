@@ -9,6 +9,9 @@ use std::path::Path;
 use crate::rpu::extension_metadata::blocks::*;
 use crate::rpu::generate::{GenerateConfig, ShotFrameEdit, VideoShot};
 use crate::rpu::vdr_dm_data::CmVersion;
+use crate::utils::nits_to_pq;
+
+use level10::PRESET_TARGET_DISPLAYS;
 
 #[derive(Default, Debug)]
 pub struct CmXmlParser {
@@ -31,6 +34,7 @@ pub struct XmlParserOpts {
 pub struct TargetDisplay {
     id: String,
     peak_nits: u16,
+    min_nits: f64,
     primaries: String,
 }
 
@@ -199,7 +203,7 @@ impl CmXmlParser {
         }
     }
 
-    fn parse_target_displays(&self, video: &Node) -> HashMap<String, TargetDisplay> {
+    fn parse_target_displays(&mut self, video: &Node) -> HashMap<String, TargetDisplay> {
         let mut targets = HashMap::new();
 
         video
@@ -234,6 +238,15 @@ impl CmXmlParser {
 
                     // Only parse HOME targets
                     if application_type == "HOME" {
+                        let min_nits = e
+                        .children()
+                        .find(|e| e.has_tag_name("MinimumBrightness"))
+                        .unwrap()
+                        .text()
+                        .unwrap()
+                        .parse::<f64>()
+                        .unwrap();
+
                         let primary_red = e
                             .descendants()
                             .find(|e| e.has_tag_name("Red"))
@@ -264,8 +277,13 @@ impl CmXmlParser {
                         
                         let primaries = [primary_red, primary_green, primary_blue,  primary_white]
                             .join(&self.separator.to_string());
-                    
-                        targets.insert(id.clone(), TargetDisplay { id, peak_nits, primaries });
+
+                        targets.insert(id.clone(), TargetDisplay { id: id.clone(), peak_nits, min_nits, primaries });
+
+                        if !PRESET_TARGET_DISPLAYS.contains(&id.parse::<u8>().unwrap()) {
+                            let block = self.parse_global_level10(targets.get(&id).unwrap()).unwrap();
+                            self.config.default_metadata_blocks.push(ExtMetadataBlock::Level10(block));
+                        }
                     }
                 } else {
                     targets.insert(id.clone(), TargetDisplay { id, peak_nits, ..Default::default()});
@@ -444,6 +462,44 @@ impl CmXmlParser {
         }
 
         Ok(())
+    }
+
+    fn parse_global_level10(&self, target: &TargetDisplay) -> Result<ExtMetadataBlockLevel10> {
+        let primaries: Vec<&str> = target.primaries.split(self.separator).collect(); 
+        let index = self.parse_primary_index(&primaries, false)?;
+        
+        let mut block = ExtMetadataBlockLevel10 {
+            target_display_index: target.id.parse::<u8>().unwrap(),
+            target_max_pq: min(4095, (nits_to_pq(target.peak_nits.into()) * 4095.0).round() as u16),
+            target_min_pq: min(4095, (nits_to_pq(target.min_nits) * 4095.0).round() as u16),
+            target_primary_index: index,
+            ..Default::default()
+        };
+
+        if index == 255 {
+            let p: Vec<u16> = primaries
+            .iter()
+            .map(|v||i| -> u16 {
+                    match i {
+                        // This value will not be 32768
+                        32767.. => min(32767, i - 32767),
+                        _ => i + 32769,
+                    }
+                } ((v.parse::<f64>().unwrap() * 32767.0 + 32767.0).round() as u16)
+            )
+            .collect();
+        
+            block.target_primary_red_x =p[0];
+            block.target_primary_red_y = p[1];
+            block.target_primary_green_x = p[2];
+            block.target_primary_green_y = p[3];
+            block.target_primary_blue_x = p[4];
+            block.target_primary_blue_y = p[5];
+            block.target_primary_white_x = p[6];
+            block.target_primary_white_y = p[7];
+        }
+
+        Ok(block)
     }
 
     pub fn parse_level1_trim(&self, node: &Node) -> Result<ExtMetadataBlockLevel1> {

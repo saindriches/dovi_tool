@@ -35,12 +35,14 @@ pub struct ExtMetadataBlockLevel8 {
     pub hue_vector_field5: u8,
 }
 
+#[cfg(feature = "serde_feature")]
 impl Serialize for ExtMetadataBlockLevel8 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     { 
         let mut state = serializer.serialize_struct("ExtMetadataBlockLevel8", 21)?;
+        state.serialize_field("target_display_index", &self.target_display_index)?;
         state.serialize_field("trim_slope", &self.trim_slope)?;
         state.serialize_field("trim_offset", &self.trim_offset)?;
         state.serialize_field("trim_power", &self.trim_power)?;

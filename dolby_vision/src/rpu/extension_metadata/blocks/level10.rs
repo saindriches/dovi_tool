@@ -27,12 +27,16 @@ pub struct ExtMetadataBlockLevel10 {
     pub target_primary_white_y: u16,
 }
 
+#[cfg(feature = "serde_feature")]
 impl Serialize for ExtMetadataBlockLevel10 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     { 
         let mut state = serializer.serialize_struct("ExtMetadataBlockLevel9", 12)?;
+        state.serialize_field("target_display_index", &self.target_display_index)?;
+        state.serialize_field("target_max_pq", &self.target_max_pq)?;
+        state.serialize_field("target_min_pq", &self.target_min_pq)?;
         state.serialize_field("target_primary_index", &self.target_primary_index)?;
 
         if self.target_primary_index == 255 {
@@ -122,23 +126,8 @@ impl ExtMetadataBlockInfo for ExtMetadataBlockLevel10 {
         
         return fields_flag;
     }
-}
 
-/* impl Default for ExtMetadataBlockLevel10 {
-    fn default() -> Self {
-        Self {
-            target_display_index: 48,
-            target_max_pq: 3079,
-            target_min_pq: 0,
-            target_primary_index: 0,
-            target_primary_red_x: None,
-            target_primary_red_y: None,
-            target_primary_green_x: None,
-            target_primary_green_y: None,
-            target_primary_blue_x: None,
-            target_primary_blue_y: None,
-            target_primary_white_x: None,
-            target_primary_white_y: None,
-        }
+    fn sort_key(&self) -> (u8, u16) {
+        (self.level(), self.target_display_index as u16)
     }
-} */
+}

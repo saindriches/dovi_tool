@@ -22,6 +22,7 @@ pub struct ExtMetadataBlockLevel9 {
     pub source_primary_white_y: u16,
 }
 
+#[cfg(feature = "serde_feature")]
 impl Serialize for ExtMetadataBlockLevel9 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
